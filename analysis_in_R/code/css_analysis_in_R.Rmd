@@ -1,0 +1,298 @@
+---
+title: "Combined_Selection_Signals_R_analysis"
+author: "Polina Malysheva"
+date: "2025-05-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(msigdbr)
+library(enrichplot)
+library(ggplot2)
+
+library(corrplot)
+library(RColorBrewer)
+library(reshape2)
+library(dplyr)
+library(Hmisc)
+
+library("GWASTools")
+library(ggvenn) 
+
+library("biomaRt")
+
+library("msigdb")
+```
+
+## Correlation analysis
+
+Example code on some data
+
+```{r}
+#read and filter numeric data
+df <- read.csv('css_project_all_metrics.tsv', sep = '\t')
+
+#df_filtered <- df[df$gene_type == "protein_coding", ]
+
+selected_cols <- c('RS_500_value', 'phast_500_value', 'phylo_500_value', 'oe_lof_upper', 'mis_z', 'pLI', 'iHS_GBR_max_500', 'SDS', 'DRC150')
+
+df_num_cols <- df[, selected_cols]
+
+cor_result <- rcorr(as.matrix(df_num_cols), type = "spearman")
+
+#matrix with corr coefficients
+cor_matrix <- cor_result$r
+
+#p-value matrix
+p_matrix <- cor_result$P
+
+#convert data
+melted_cormat <- melt(cor_matrix)
+melted_pmat <- melt(p_matrix)
+
+plot_data <- cbind(
+  melted_cormat,
+  pvalue = melted_pmat$value
+)
+
+#for triangle form
+plot_data <- plot_data[!lower.tri(cor_matrix, diag = TRUE), ]
+
+#heatmap
+ggplot(plot_data, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white", linewidth = 0.5) +  
+  geom_text(aes(label = ifelse(pvalue < 0.001, sprintf("%.2f***", value),
+                              ifelse(pvalue < 0.01, sprintf("%.2f**", value),
+                                     ifelse(pvalue < 0.05, sprintf("%.2f*", value),
+                                            sprintf("%.2f", value))))),
+            color = "black", 
+            size = 4.5) + 
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                      midpoint = 0, limit = c(-1, 1)) +
+  theme_minimal(base_size = 16) + 
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1,
+                              color = "black", size = 16),
+    axis.text.y = element_text(color = "black", size = 16),
+    legend.text = element_text(color = "black", size = 12),
+    legend.title = element_text(color = "black", size = 16),
+    plot.background = element_rect(fill = "white", color = NA)
+  ) +
+  labs(x = "", y = "", fill = "Correlation") +
+  coord_fixed()
+
+#ggsave("high_res_corr_hm.png", plot = p, 
+#       width = 20, height = 16, units = "in", dpi = 300)
+```
+
+## pvalues correction
+
+Example code on some data
+
+```{r}
+df <- read.csv("DRC_150.180813.bed", header = FALSE, 
+               col.names = c("chr", "start", "end", "drc", "pvalue"), sep="\t")
+
+df$pvalue_fdr <- p.adjust(p=df$pvalue, method = 'fdr')
+fdr_corrected <- p.adjust(p=df$pval_iHS_max, method = 'fdr')
+qqPlot(df$pvalue_fdr)
+```
+
+## Filtering genes with combined selection signals
+
+```{r}
+#read df
+df <- read.csv('gpp_ihs__snp_counts_GBR_gnomad_DRC150_SDS_all_data.tsv',
+               sep = '\t')
+
+#filter by some variables
+df_RS_high <- df %>% 
+  filter(RS_500_value >= quantile(RS_500_value, 0.9, na.rm = TRUE))
+
+df_loeuf_low <- df %>% 
+  filter(oe_lof_upper <= quantile(oe_lof_upper, 0.1, na.rm = TRUE))
+
+df_iHS <- df %>% 
+  filter(pval_iHS_max_fdr < 0.05)
+
+df_drc <- df %>% 
+  filter(DRC150_signif_snp_count != 0)
+```
+
+```{r}
+#make a list with gene names for venn diagram
+venn_data <- list(
+  "RS" = df_RS_high$gene_name,
+  "LOEUF" = df_loeuf_low$gene_name,
+  "Signif. iHS" = df_iHS$gene_name,
+  "DRC150 SNPs count" = df_drc$gene_name
+)
+
+pic <- ggvenn(
+  venn_data,
+  fill_color = c("#E69F00", "#56B4E9", "#009E73", "#F0E442"),
+  stroke_size = 0.5,
+  set_name_size = 4,
+  text_size = 3
+) + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+print(pic)
+```
+
+```{r}
+#filter by condition (RS OR LOEUF) AND (signi_iHS OR signif_DRC150_SNP)
+result_11 <- df %>% 
+  filter(gene_name %in% genes_combined) %>%
+  distinct(gene_name, .keep_all = TRUE) 
+
+write.csv(result_11, 'list_comb_signals_409.csv', row.names = FALSE)
+```
+
+# GO analysis
+
+`AnnotationDbi` provides an interface for connecting and querying various annotation databases using SQLite data storage. The AnnotationDbi packages can query the OrgDb, TxDb, EnsDb, Go.db, and BioMart annotations
+
+`org.Hs.eg.db` package with central identifier Entrez ID.
+
+## Count the number of biological processes/molecular functions associated with a given gene
+
+`select` will retrieve the data as a data.frame based on parameters for selected keys columns and keytype arguments
+
+```{r}
+df <- read.csv('combined_css.tsv', sep = '\t')
+
+genes <- as.vector(df$gene_name)
+
+genes_go_data <- AnnotationDbi::select(  
+  org.Hs.eg.db,
+  keys = genes,
+  columns = c("GO", "ONTOLOGY"),  
+  keytype = "SYMBOL"
+)
+
+genes_go_data_bp <- genes_go_data %>%
+  filter(ONTOLOGY == 'BP')
+
+genes_go_data_mf <- genes_go_data %>%
+  filter(ONTOLOGY == 'MF')
+
+#for BP
+go_count_bp <- aggregate(GO ~ SYMBOL, data = genes_go_data_bp, FUN = function(x) length(unique(x)))
+
+colnames(go_count_bp) <- c("Gene", "GO_BP_Count")
+
+#for MF
+go_count_mf <- aggregate(GO ~ SYMBOL, data = genes_go_data_mf, FUN = function(x) length(unique(x)))
+
+colnames(go_count_mf) <- c("Gene", "GO_MF_Count")
+
+#merge data for BP and MF
+merged_df <- merge(go_count_bp, go_count_mf, by = "Gene", all.x = TRUE)
+merged_df[is.na(merged_df$GO_MF_Count), "GO_MF_Count"] <- 0
+
+#save data
+write.csv(merged_df, 'go_all_genesterms_counts_bp_mf.csv', row.names = FALSE)
+```
+
+## GO over-representation analysis for protein-coding genes
+
+GO analyses (`groupGO()`, `enrichGO()` and `gseGO()`) support organisms that have an OrgDb object available.
+
+The `clusterProfiler` package implements `enrichGO()` for gene ontology over-representation test.
+
+`keyType` parameter to specify the input gene ID type.
+
+```{r}
+#convertation gene names to ENTREZID 
+
+df_pp_genes <- df %>% 
+  filter(gene_type == 'protein_coding')
+
+gene_entrez_ids <- bitr(df_pp_genes$gene_name, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Hs.eg.db")
+
+#GO for BP
+go_enrich_bp <- enrichGO(
+  gene = gene_entrez_ids$ENTREZID,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENTREZID",
+  ont = "", 
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.01,
+  qvalueCutoff = 0.05,
+  readable = TRUE
+)
+dotplot(go_enrich_bp)
+```
+
+For `MF` with relaxed conditions:
+
+```{r}
+#GO enrichment for Molecular Function (MF)
+go_enrich_mf <- enrichGO(
+  gene = gene_entrez_ids$ENTREZID,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENTREZID",
+  ont = "MF", 
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,  #relaxed p-value cutoff
+  qvalueCutoff = 0.2,   #relaxed q-value cutoff
+  readable = TRUE      
+)
+dotplot(go_enrich_mf)
+#save.image('go_ann.png')
+```
+
+## Gene set enrichment analysis with `MSigDb` database
+
+**Molecular Signatures Database** is a collection of annotated gene sets. It contains 8 major collections:
+
+**H**: hallmark gene sets
+
+**C1**: positional gene sets
+
+**C2**: curated gene sets
+
+-   subcollection CP: Canonical Pathways
+
+-   subcollection CP:REACTOME Reactome Pathways
+
+**C3**: motif gene sets
+
+**C4**: computational gene sets
+
+**C5**: GO gene sets
+
+**C6**: oncogenic signatures
+
+**C7**: immunologic signatures
+
+There is an R package, `msigdbr`, that already packed the MSigDB gene sets in tidy data format that can be used directly with clusterProfiler (Yu et al. 2012).
+
+For Canonical Pathways:
+
+```{r}
+#msigdbr_collections() #list of available collections
+``` 
+
+```{r}
+#retrieve specific collection of human genes 
+msigdb_data <- msigdbr(species = "Homo sapiens", category = "C2") %>%
+  filter(gs_subcat != "CGP") %>%  
+  dplyr::select(gs_name, entrez_gene) %>%  #keep necessary columns
+  rename(term = gs_name, gene = entrez_gene)
+
+#enrichment
+msigdb_cp <- enricher(
+  gene = gene_entrez_ids$ENTREZID,  
+  pvalueCutoff = 0.05,
+  pAdjustMethod = "BH",
+  TERM2GENE = msigdb_data
+)
+
+dotplot(msigdb_cp)
+```
+
