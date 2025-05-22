@@ -36,25 +36,27 @@ Natural selection is a key mechanism of evolution. The study of selection signal
 
 Workflow is shown in the figure below 
 
-! [] (workflow . png)
+![](workflow.png)
 
 ## Results
 
 1. A total of 57,783 genes were included in the analysis (mitochondrial genes were excluded). Negative selection metrics, which are based on multiple alignments, showed a **strong positive correlation** (Spearman’s p for phastCons-phyloP: 0.77; phastCons-RS: 0.59; phyloP-RS: 0.59). Expectedly, we observed a **strong negative correlation** between the negative selection metrics from the gnomAD database (LOEUF-mis_z correlation coefficient: -0.69).
 
-! [] (heatmap . png)
+![](heatmap.png)
 
 P-values are indicated by asterisks: pvalue < 0.001 – ***, pvalue < 0.01 – **, pvalue < 0.05 – *.
 
 2. Out of 57,783 genes, **163 genes** were obtained with both positive and negative selection signals. Among these, there were 146 protein-coding genes, 7 antisense RNAs, 5 lincRNAs, 4 pseudogenes, and 1 processed transcript.
 
-! [] (venn_diagramm . png)
+![](venn_diagramm.png)
 
 3. Using per-gene GO terms counts,  we found that genes carrying the combined selection signal participate in a higher number of biological processes and have a broader range of molecular function compared to an average gene in the genome (Mann-Whitney U test, p-value for Biological Process: 3.3e-08; for Molecular Functions: 8.2e-08).
 
+![](go_counts.png)   
+
 These genes were found to be involved in processes related to the regulation of nervous system development, signaling between nerve cells, and the positive regulation of cell differentiation.
 
-! [] (go_annot . png)   
+![](go_annot.png) 
 
 ## Conclusion
 
